@@ -55,6 +55,11 @@ cover/
 *.mo
 *.pot
 dataset/
+data/*
+!data/**/
+!data/.gitkeep
+!data/**/.gitkeep
+*.csv
 # Django stuff:
 *.log
 local_settings.py
