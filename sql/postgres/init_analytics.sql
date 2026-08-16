@@ -1,0 +1,1 @@
+-- PostgreSQL analytics tables and KPI summary schemas
