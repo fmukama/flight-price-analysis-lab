@@ -221,3 +221,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Docker & Local Runtime additions
+.env
+logs/
+target/
