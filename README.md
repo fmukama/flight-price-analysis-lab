@@ -1,3 +1,4 @@
+```
 flight-price-pipeline/
 ├── .github/
 │   └── workflows/
@@ -43,3 +44,4 @@ flight-price-pipeline/
 ├── docker-compose.yml             # Orchestrates Airflow (Webserver, Scheduler), Postgres, MySQL, Jupyter
 ├── Makefile                       # Developer CLI automation (make up, make down, make test, make eda)
 └── README.md                      # Architecture documentation, KPI logic, and setup guide
+```
