@@ -1,0 +1,21 @@
+name: CD Container Build Verification
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Create dummy .env file
+        run: cp .env.example .env
+
+      - name: Validate Docker Compose Configuration
+        run: docker compose config
+
+      - name: Build Docker Stack
+        run: docker compose build
