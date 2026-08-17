@@ -24,5 +24,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Expose default Jupyter port
 EXPOSE 8888
 
-# Launch JupyterLab bound to all network interfaces with no browser popup
-CMD ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", "--NotebookApp.token=''"]
+# Launch JupyterLab bound to all network interfaces with no browser popup.
+# Shell form so ${JUPYTER_TOKEN} from docker-compose is expanded at runtime --
+# the previous hardcoded `--NotebookApp.token=''` disabled auth entirely and
+# silently ignored the JUPYTER_TOKEN the compose file and Makefile advertise.
+CMD ["sh", "-c", "jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --IdentityProvider.token=\"${JUPYTER_TOKEN}\""]

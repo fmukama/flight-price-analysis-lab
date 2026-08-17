@@ -12,8 +12,15 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
-    AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+    # Shared signing key so webserver sessions stay valid across restarts
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_WEBSERVER_SECRET_KEY:-flight_price_local_dev_secret}
+    # Expose the scheduler health endpoint so its healthcheck can be meaningful
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    # Lets `from dags.scripts... import ...` resolve inside tasks
     PYTHONPATH: /opt/airflow
+  # AIRFLOW_UID belongs here, not in `environment` -- it selects the container
+  # user so files written into the bind mounts match host ownership.
+  user: "${AIRFLOW_UID:-50000}:0"
   volumes:
     # Mount local directories into container for live sync code editing
     - ./dags:/opt/airflow/dags
@@ -40,7 +47,10 @@ services:
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     ports:
-      - "${MYSQL_PORT:-3306}:3306"
+      # MYSQL_HOST_PORT is the host-side port only. Change it freely to dodge a
+      # local clash; the in-container port stays 3306, which is what MYSQL_PORT
+      # tells the pipeline scripts to dial over the compose network.
+      - "${MYSQL_HOST_PORT:-3306}:3306"
     volumes:
       - mysql_staging_data:/var/lib/mysql
       - ./sql/mysql:/docker-entrypoint-initdb.d # Runs init_staging.sql on first startup
@@ -61,10 +71,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-      # Additional DB creation for Airflow metadata during initialization
-      POSTGRES_MULTIPLE_DATABASES: ${AIRFLOW_METADATA_DB}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Host-side port only -- see the MySQL note above.
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - postgres_analytics_data:/var/lib/postgresql/data
       - ./sql/postgres:/docker-entrypoint-initdb.d # Runs init_analytics.sql on first startup
@@ -84,19 +93,41 @@ services:
     command:
       - -c
       - |
-        # Create metadata database if missing inside PostgreSQL
-        PGPASSWORD=${POSTGRES_PASSWORD} psql -h postgres -U ${POSTGRES_USER} -d ${POSTGRES_DB} -tc "SELECT 1 FROM pg_database WHERE datname = '${AIRFLOW_METADATA_DB}'" | grep -q 1 || \
-        PGPASSWORD=${POSTGRES_PASSWORD} psql -h postgres -U ${POSTGRES_USER} -d ${POSTGRES_DB} -c "CREATE DATABASE ${AIRFLOW_METADATA_DB};"
-        
-        # Run database migrations and add admin credentials
-        airflow db init
+        # Abort on the first failure. Without this, a failing `airflow` command
+        # still exits 0, the `service_completed_successfully` gate passes, and
+        # the webserver/scheduler are released into an endless crash-loop with
+        # no signal that initialisation never actually happened.
+        set -euo pipefail
+
+        echo "[init] Ensuring Airflow metadata database '${AIRFLOW_METADATA_DB}' exists..."
+        if ! PGPASSWORD=${POSTGRES_PASSWORD} psql -h postgres -U ${POSTGRES_USER} -d ${POSTGRES_DB} \
+             -tAc "SELECT 1 FROM pg_database WHERE datname = '${AIRFLOW_METADATA_DB}'" | grep -q 1; then
+          PGPASSWORD=${POSTGRES_PASSWORD} psql -h postgres -U ${POSTGRES_USER} -d ${POSTGRES_DB} \
+             -c "CREATE DATABASE ${AIRFLOW_METADATA_DB};"
+          echo "[init] Created database ${AIRFLOW_METADATA_DB}."
+        else
+          echo "[init] Database ${AIRFLOW_METADATA_DB} already present."
+        fi
+
+        # `db migrate` is the supported command in 2.9; `db init` is deprecated.
+        echo "[init] Running Airflow schema migrations..."
+        airflow db migrate
+
+        echo "[init] Ensuring admin user exists..."
         airflow users create \
           --username ${_AIRFLOW_WWW_USER_USERNAME:-admin} \
           --firstname Admin \
           --lastname User \
           --role Admin \
           --email admin@example.com \
-          --password ${_AIRFLOW_WWW_USER_PASSWORD:-admin} || true
+          --password ${_AIRFLOW_WWW_USER_PASSWORD:-admin} \
+          || echo "[init] Admin user already exists, skipping."
+
+        # Final gate: proves the metadata DB is reachable and migrated before
+        # any dependent service is allowed to start.
+        echo "[init] Verifying metadata database connectivity..."
+        airflow db check
+        echo "[init] Initialisation complete."
     restart: on-failure
 
   # 4. AIRFLOW WEBSERVER: Web Dashboard UI (Port 8080)
@@ -106,7 +137,13 @@ services:
     restart: always
     command: webserver
     ports:
-      - "8080:8080"
+      - "${AIRFLOW_WEB_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     depends_on:
       airflow-init:
         condition: service_completed_successfully
@@ -117,6 +154,12 @@ services:
     container_name: flight_airflow_scheduler
     restart: always
     command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     depends_on:
       airflow-init:
         condition: service_completed_successfully
@@ -131,6 +174,7 @@ services:
     ports:
       - "${JUPYTER_PORT:-8888}:8888"
     environment:
+      # Consumed by the image CMD as the JupyterLab access token
       JUPYTER_TOKEN: ${JUPYTER_TOKEN:-easyeda2026}
     volumes:
       - ./notebooks:/app/notebooks

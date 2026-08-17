@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  AIRFLOW_VERSION: "2.9.2"
+  PYTHON_VERSION: "3.11"
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -36,22 +40,40 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libpq-dev default-libmysqlclient-dev build-essential
 
+      # Install the SAME dependency set as the Airflow image, under the SAME
+      # constraints file. A previous revision installed requirements.txt and
+      # then separately pinned `apache-airflow==2.9.2`, which silently repaired
+      # the broken SQLAlchemy>=2.0 spec in requirements.txt -- so CI stayed
+      # green while the Docker image shipped a crash-looping Airflow 3.3.1.
+      # Never re-pin Airflow here; let requirements.txt be the single source.
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install flake8 pytest pyarrow
-          pip install -r docker/airflow/requirements.txt
-          pip install apache-airflow==2.9.2 --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.9.2/constraints-3.11.txt"
+          pip install flake8
+          pip install -r docker/airflow/requirements.txt \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+
+      # Fail fast and loudly if the resolved environment is not the one the
+      # DAGs are written against.
+      - name: Verify Resolved Dependency Versions
+        run: |
+          python - <<'PY'
+          import airflow, sqlalchemy
+          assert airflow.__version__ == "2.9.2", f"airflow {airflow.__version__} != 2.9.2"
+          assert sqlalchemy.__version__.startswith("1.4"), \
+              f"sqlalchemy {sqlalchemy.__version__} must be 1.4.x for Airflow 2.9.x"
+          print(f"verified airflow={airflow.__version__} sqlalchemy={sqlalchemy.__version__}")
+          PY
 
       - name: Lint Code with Flake8
         run: |

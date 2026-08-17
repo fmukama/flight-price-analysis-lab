@@ -226,3 +226,8 @@ __marimo__/
 .env
 logs/
 target/
+# Pipeline intermediates: the parquet handoff written by the DAG into
+# data/processed/ is regenerated every run and must never be committed.
+data/processed/*
+!data/processed/.gitkeep
+*.parquet
