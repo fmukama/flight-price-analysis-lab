@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Common configuration shared across all Airflow service blocks
 x-airflow-common: &airflow-common
   build:
