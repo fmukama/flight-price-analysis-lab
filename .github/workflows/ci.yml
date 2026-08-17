@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [ main ]
 
+# Superseded runs on the same ref are pointless; cancel them.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   AIRFLOW_VERSION: "2.9.2"
   PYTHON_VERSION: "3.11"
@@ -14,27 +19,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_ROOT_PASSWORD: root_password
-          MYSQL_DATABASE: staging_db
-          MYSQL_USER: staging_user
-          MYSQL_PASSWORD: staging_password
-        ports:
-          - 3306:3306
-        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
-
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_USER: postgres_user
-          POSTGRES_PASSWORD: postgres_password
-          POSTGRES_DB: analytics_db
-        ports:
-          - 5432:5432
-        options: --health-cmd="pg_isready" --health-interval=10s --health-timeout=5s --health-retries=3
+    # No MySQL/Postgres services: the suite runs on in-memory fixtures and
+    # DagBag parsing only. DB-facing guarantees are verified against the real
+    # stack via `make test`. No apt-get either -- nothing here compiles.
 
     steps:
       - name: Checkout Code
@@ -44,50 +31,27 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: docker/airflow/requirements.txt
 
-      - name: Install System Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libpq-dev default-libmysqlclient-dev build-essential
-
-      # Install the SAME dependency set as the Airflow image, under the SAME
-      # constraints file. A previous revision installed requirements.txt and
-      # then separately pinned `apache-airflow==2.9.2`, which silently repaired
-      # the broken SQLAlchemy>=2.0 spec in requirements.txt -- so CI stayed
-      # green while the Docker image shipped a crash-looping Airflow 3.3.1.
-      # Never re-pin Airflow here; let requirements.txt be the single source.
-      - name: Install Python Dependencies
+      # Same dependency set and constraints file as the Airflow image. Never
+      # re-pin Airflow here: doing so once masked a broken requirements.txt and
+      # kept CI green while the image shipped a crash-looping Airflow 3.3.1.
+      # The version assertion lives in tests/ so it runs locally too.
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install flake8
-          pip install -r docker/airflow/requirements.txt \
+          pip install flake8 -r docker/airflow/requirements.txt \
             --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
 
-      # Fail fast and loudly if the resolved environment is not the one the
-      # DAGs are written against.
-      - name: Verify Resolved Dependency Versions
+      - name: Lint
         run: |
-          python - <<'PY'
-          import airflow, sqlalchemy
-          assert airflow.__version__ == "2.9.2", f"airflow {airflow.__version__} != 2.9.2"
-          assert sqlalchemy.__version__.startswith("1.4"), \
-              f"sqlalchemy {sqlalchemy.__version__} must be 1.4.x for Airflow 2.9.x"
-          print(f"verified airflow={airflow.__version__} sqlalchemy={sqlalchemy.__version__}")
-          PY
-
-      - name: Lint Code with Flake8
-        run: |
-          # Stop build if there are Python syntax errors or undefined names
+          # Blocking: syntax errors and undefined names
           flake8 dags tests --count --select=E9,F63,F7,F82 --show-source --statistics
-          # Warning-only check for formatting
+          # Advisory: style only
           flake8 dags tests --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
-      - name: Run Test Suite
+      - name: Test
         env:
-          MYSQL_HOST: 127.0.0.1
-          MYSQL_PORT: 3306
-          POSTGRES_HOST: 127.0.0.1
-          POSTGRES_PORT: 5432
           PYTHONPATH: .
-        run: |
-          pytest tests -v
+        run: pytest tests -q

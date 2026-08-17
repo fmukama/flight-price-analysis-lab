@@ -1,17 +1,9 @@
-# ---------------------------------------------------------------------------
-# Airflow image dependencies.
+# Airflow image dependencies. Versions are exact AND the Dockerfile installs
+# this file under the official constraints-2.9.2 file; both guards matter.
 #
-# IMPORTANT: every version here is exact, and the Dockerfile installs this file
-# under the official constraints-2.9.2 file. Both guards matter.
-#
-# A previous revision used `SQLAlchemy>=2.0.0`. Airflow 2.9.2 requires
-# sqlalchemy>=1.4.36,<2.0, so that spec was unsatisfiable on 2.9.2 and pip
-# "resolved" it by silently upgrading apache-airflow to 3.3.1 -- the only
-# release allowing SQLAlchemy 2.x. Airflow 3 renamed the `airflow` console
-# script, so the 2.9.2 image entrypoint (`airflow db check`) died with
-# "command not found" and the scheduler/webserver crash-looped indefinitely.
-# Keep the core pinned and keep SQLAlchemy below 2.0.
-# ---------------------------------------------------------------------------
+# `SQLAlchemy>=2.0.0` here once made pip upgrade apache-airflow to 3.3.1 (the
+# only release permitting SQLAlchemy 2.x), whose renamed CLI entrypoint left the
+# 2.9.2 image crash-looping on `airflow db check`. Keep SQLAlchemy below 2.0.
 
 # Pin the core so provider/library resolution can never move it again.
 apache-airflow==2.9.2

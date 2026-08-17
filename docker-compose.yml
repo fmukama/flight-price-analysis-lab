@@ -11,7 +11,9 @@ x-airflow-common: &airflow-common
     # Using LocalExecutor to execute multiple tasks concurrently on the single scheduler
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
+    # Paused on creation (the Airflow default). A DAG with a past start_date
+    # that is live the moment the stack boots will fire an unattended run.
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     # Shared signing key so webserver sessions stay valid across restarts
     AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_WEBSERVER_SECRET_KEY:-flight_price_local_dev_secret}
     # Expose the scheduler health endpoint so its healthcheck can be meaningful
@@ -93,10 +95,9 @@ services:
     command:
       - -c
       - |
-        # Abort on the first failure. Without this, a failing `airflow` command
-        # still exits 0, the `service_completed_successfully` gate passes, and
-        # the webserver/scheduler are released into an endless crash-loop with
-        # no signal that initialisation never actually happened.
+        # Without this, a failing `airflow` command still exits 0, the
+        # service_completed_successfully gate passes, and the webserver and
+        # scheduler are released into a crash-loop with no signal why.
         set -euo pipefail
 
         echo "[init] Ensuring Airflow metadata database '${AIRFLOW_METADATA_DB}' exists..."
