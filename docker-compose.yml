@@ -189,6 +189,23 @@ services:
     networks:
       - flight_network
 
+  # 7. ADMINER: Lightweight SQL browser for the staging and analytics databases
+  adminer:
+    image: adminer:4.8.1
+    container_name: flight_adminer
+    restart: always
+    ports:
+      - "${ADMINER_PORT:-8081}:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    depends_on:
+      mysql:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - flight_network
+
 # Persistent data volumes so database records remain intact when containers restart
 volumes:
   mysql_staging_data:
