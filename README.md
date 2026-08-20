@@ -141,21 +141,3 @@ re-pins Airflow; the version assertion lives in `tests/test_dag_integrity.py` so
 |---|---|
 | `MYSQL_PORT` / `POSTGRES_PORT` | Port dialled **inside** the compose network; must match the DB's real listening port |
 | `MYSQL_HOST_PORT` / `POSTGRES_HOST_PORT` | Port published **to your machine**; change freely to dodge a local clash |
-
----
-
-## Challenges encountered
-
-| # | Problem | Root cause | Resolution |
-|---|---|---|---|
-| 1 | Webserver and scheduler crash-looped **68 times**; `airflow: command not found` | `SQLAlchemy>=2.0.0` is unsatisfiable on Airflow 2.9.2 (`<2.0`), so pip "solved" it by upgrading Airflow to **3.3.1**, which renamed the CLI entrypoint the 2.9.2 image calls | Pinned all deps exactly under `constraints-2.9.2`; build-time assertion in the Dockerfile plus a matching test |
-| 2 | That failure was invisible; dependent services were released into the crash-loop | `airflow-init` had no `set -e`, so two failed `airflow` commands still exited **0** and satisfied `service_completed_successfully` | `set -euo pipefail`, `db migrate` instead of deprecated `db init`, closing `airflow db check` gate |
-| 3 | ETL could not reach MySQL | `MYSQL_PORT` served as both the host-published port (3307, to dodge a clash) and the in-network port, so tasks dialled `mysql:3307` where MySQL listens on 3306 | Split into `MYSQL_PORT` (in-network) and `MYSQL_HOST_PORT` (published) |
-| 4 | Staging held **114,000 rows** from a 57,000-row CSV — every record twice — while reporting success | The unpaused DAG fired a scheduled run that raced an out-of-band task execution; `TRUNCATE` + append sat in separate transactions, so both wiped and both appended | `GET_LOCK` advisory lock; `DELETE` + inserts in one transaction; **row-count reconciliation** makes this a hard error; DAG now `is_paused_upon_creation` |
-| 5 | The dataset's largest quality issue was being erased | `total_fare` was overwritten unconditionally, discarding the source value for 2,522 rows | Recompute, but preserve `total_fare_original_bdt` + `fare_mismatch_flag` and report the count |
-| 6 | Imputed rows were indistinguishable from real ones | Missing `seasonality` filled with `"Regular"` — an actual category in the data | `"Unknown"` sentinels for all categorical defaults |
-| 7 | A mid-load failure could leave KPIs disagreeing with the fact table | Each of the 5 tables committed separately | All five in one `engine.begin()` transaction (PostgreSQL's `TRUNCATE` is transactional) |
-| 8 | CI was structurally unable to catch challenge 1 | CI installed `requirements.txt` then separately pinned `apache-airflow==2.9.2`, silently repairing the defect | `requirements.txt` is the single source of truth; version assertion moved into the test suite |
-| 9 | CI needed MySQL + PostgreSQL service containers | `DagBag.get_dag()` queries the metadata DB for serialized-DAG staleness | Structural tests read `dag_bag.dags[...]`; CI dropped both services and the apt-get build step |
-| 10 | A route's primary key changed on every run | `kpi_popular_routes` was keyed on `route_rank`, which shifts as volumes change | Keyed on `route_code`; rank is a unique attribute |
-| 11 | `make test` could not run | pytest was absent from the Airflow image | Added to `requirements.txt`; also fixed a Jupyter image that hardcoded an empty token while advertising `JUPYTER_TOKEN` |
